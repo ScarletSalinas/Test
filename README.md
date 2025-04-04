@@ -1,5 +1,5 @@
 ## Test #1 Port Scanner
-###Purpose: this program demonstrates a concurrent TCP port scanner that checks for open ports on a target host
+### Purpose: this program demonstrates a concurrent TCP port scanner that checks for open ports on a target host
 
 ###  Port Scanner: Files
 - main.go
