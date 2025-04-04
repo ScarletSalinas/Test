@@ -53,6 +53,9 @@ func main() {
 	// Add a -target flag to specify the IP address or hostname
 	target := flag.String("target","scanme.nmap.org", "Hostname or IP address to scan")
 
+	// Add a -workers flag to set the number of concurrent workers (default: 100)
+	workers := flag.Int("workers", 100, "Number of workers")
+
 	//Add -start-port and -end-port flags (default: 1 to 1024).
 	startPort := flag.Int("start", 1, "First port in range")
 	endPort := flag.Int("end", 1024, "Last port in range")
@@ -65,18 +68,15 @@ func main() {
 	var wg sync.WaitGroup
 
 	// Buffered channel for port scanning tasks (capacity: 100)
-	tasks := make(chan string, 100)
+	tasks := make(chan string, *workers)
 
 	// Network dialer with timeout
 	dialer := net.Dialer {
 		Timeout: 5 * time.Second,
 	}
-  
-	// Concurrent workers
-	workers := 100
 
 	// Launch worker goroutines
-    for i := 1; i <= workers; i++ {
+    for i := 1; i <= *workers; i++ {
 		wg.Add(1)
 		go worker(&wg, tasks, dialer)
 	}
