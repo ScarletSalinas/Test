@@ -24,6 +24,26 @@ type scanResults struct {
 	Duration time.Duration // Stores scan time
 }
 
+// Func to print scan summary results
+func (r *scanResults) String() string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	sort.Ints(r.Ports)
+	if len(r.Ports) == 0 {
+		return "No ports found"
+	}
+
+	return fmt.Sprintf(
+        "\nScan Results\n"+
+        "-----------\n"+
+        "Target: %s\n"+
+        "Open ports: %v\n"+
+        "Total open: %d\n"+
+        "Duration: %s\n",
+        r.target, r.Ports, r.Count, r.Duration.Round(time.Millisecond))
+}
+
 // Func to separate comma list into individual target strings
 func parseTargets(input string) []string {
 	targets := []string{}	// Initialize empty slice
@@ -38,30 +58,16 @@ func parseTargets(input string) []string {
 		}
 	}
 
-	// Apply default target if no other valid found
+	// Apply default target if no other valid one found
 	if len(targets) == 0 {
 		targets = append(targets, "scanme.nmap.org")
 	}
 	return targets
 }
 
-// Func to print scan summary results
-func (r *scanResults) String() string {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	sort.Ints(r.Ports)
-	return fmt.Sprintf(
-		"\nScan Summary\n"+
-		"-----------------\n"+
-		"Target: %s\n"+
-		"Open ports %v\n"+
-		"Total open: %d\n"+
-		"Duration: %s\n",
-		r.target, r.Ports, r.Count, r.Duration.Round(time.Millisecond))
-}
 
 // Worker func handles port scanning
-func worker(wg *sync.WaitGroup, tasks chan string, dialer net.Dialer, results *scanResults) {
+func worker(wg *sync.WaitGroup, tasks chan string, dialer net.Dialer, results map[string] *scanResults) {
 	defer wg.Done()	// Signal done when worker func exits
 	maxRetries := 3	// Max retry attempts
 
@@ -75,7 +81,7 @@ func worker(wg *sync.WaitGroup, tasks chan string, dialer net.Dialer, results *s
             continue
         }
 
-		port, err := strconv.Atoi(portStr)
+		port, err := strconv.Atoi(portStr) // Convert port string to int
         if err != nil {
             fmt.Printf("Invalid port number %q: %v\n", portStr, err)
             continue
@@ -89,24 +95,19 @@ func worker(wg *sync.WaitGroup, tasks chan string, dialer net.Dialer, results *s
 				conn.Close()	// Close connection
 				fmt.Printf("Connection to %s was successful\n", addr)
 				success = true
-				results.mu.Lock()
-                results.Ports = append(results.Ports, port)
-                results.Count++
+				
+				results[host].mu.Lock()
+                results[host].Ports = append(results[host].Ports, port)
+                results[host].Count++
+				results[host].target = host
+                results[host].mu.Unlock()
 
-                results.mu.Unlock()
 				fmt.Printf("%s - port %d is open\n", host, port)
 				break	// Exit retry loop
 			
 			}
 
-			if success { 
-				results.mu.Lock()
-				results.Ports = append(results.Ports, port)
-				results.Count++
-				results.mu.Unlock()
-			}
-
-			// Calculate expon. backoff
+			// Calculate exponential backoff
 			backoff := time.Duration(1<<i) * time.Second
 			fmt.Printf("Attempt %d to %s failed. Waiting %v...\n", i+1,  addr, backoff)
 
@@ -115,7 +116,7 @@ func worker(wg *sync.WaitGroup, tasks chan string, dialer net.Dialer, results *s
 
 		// Report if all attempts failed
 		if !success {
-			fmt.Printf("Failed to connect to %s after %d attempts\n", addr, maxRetries)
+			fmt.Printf("Failed to connect to %v after %d attempts\n", port, maxRetries)
 		}
 	}
 }
@@ -145,43 +146,40 @@ func main() {
 	} else {
 		targetList = parseTargets(*targets)
 	}
+
+	// Initialize results with start time
+	results:= make(map[string]*scanResults)
+	startTimes := make(map[string]time.Time) // Initialize startTimes map
+	for _, t := range targetList {
+		t = strings.TrimSpace(t)
+		results[t] = &scanResults{target: t}	//Initialize with target
+		startTimes[t] = time.Now()	// Record start time for each target
+	}
 	
 	dialer := net.Dialer{Timeout: *timeout}	// Network dialer with timeout
-	var wg sync.WaitGroup
-	results := &scanResults{target: *target}
-	startTime := time.Now()
 	tasks := make(chan string, *workers)	// Buffered channel for port scanning tasks (capacity: 100)
+	var wg sync.WaitGroup
 
 
 	// Launch worker goroutines
-    for i := 1; i <= *workers; i++ {
+    for i := 0; i < *workers; i++ {
 		wg.Add(1)
 		go worker(&wg, tasks, dialer, results)
 	}
 
-	
-	for _, target := range targetList {
-		target = strings.TrimSpace(target)
-		fmt.Printf("\nScanning %s (ports %d-%d)\n", target, *startPort, *endPort)
-		// Generate tasks for THIS target
-		for p := *startPort; p <= *endPort; p++ {
-			tasks <- net.JoinHostPort(target, strconv.Itoa(p))
-		}
-	}
+	// Process targets
+    for currentTarget := range results {
+        for port := *startPort; port <= *endPort; port++ {
+            tasks <- net.JoinHostPort(currentTarget, strconv.Itoa(port))
+        }
+    }
+    close(tasks)
 
-	// Close task channel
-	close(tasks)
+    wg.Wait()
 
-	// Wait for all workers to complete
-	wg.Wait()
-
-	// Calculate scan time
-	results.mu.Lock()
-	results.Duration = time.Since(startTime)
-	results.mu.Unlock()
-
-	// Print Summary
-	fmt.Printf("\n%s\n", results)
-
-	// Program exits when all scanning is done
+    // Print results
+    for currentTarget, res := range results {
+		res.Duration = time.Since(startTimes[currentTarget])
+		fmt.Println(res)
+    }
 }
