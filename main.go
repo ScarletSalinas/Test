@@ -10,10 +10,12 @@ import (
 	"net"
 	"sort"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 )
 
+// Scan Summary
 type scanResults struct {
 	mu sync.Mutex
 	target string	// Stores scanned host
@@ -22,6 +24,28 @@ type scanResults struct {
 	Duration time.Duration // Stores scan time
 }
 
+// Func to separate comma list into individual target strings
+func parseTargets(input string) []string {
+	targets := []string{}	// Initialize empty slice
+
+	// Process input
+	if input != "" {
+		raw := strings.Split(input, ",")	// Split by comma
+		for _, t:= range raw {	// Clean each split
+			if t = strings.TrimSpace(t); t != "" {
+				targets = append(targets, t)
+			}
+		}
+	}
+
+	// Apply default target if no other valid found
+	if len(targets) == 0 {
+		targets = append(targets, "scanme.nmap.org")
+	}
+	return targets
+}
+
+// Func to print scan summary results
 func (r *scanResults) String() string {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -58,7 +82,7 @@ func worker(wg *sync.WaitGroup, tasks chan string, dialer net.Dialer, results *s
         }
 
 		var success bool 
-		for i := range maxRetries {     
+		for i := range maxRetries {  	// Retry loop   
 			conn, err := dialer.Dial("tcp", addr)	//Attempt tcp connection 
 
 			if err == nil {	// Conection successful
@@ -75,7 +99,7 @@ func worker(wg *sync.WaitGroup, tasks chan string, dialer net.Dialer, results *s
 			
 			}
 
-			if success {
+			if success { 
 				results.mu.Lock()
 				results.Ports = append(results.Ports, port)
 				results.Count++
@@ -99,7 +123,8 @@ func worker(wg *sync.WaitGroup, tasks chan string, dialer net.Dialer, results *s
 func main() {
 
 	// command-line flags
-	target := flag.String("target","scanme.nmap.org", "Hostname or IP address to scan")
+	target  := flag.String("target", "", "Single host to scan (overrides -targets)")
+	targets := flag.String("targets", "scanme.nmap.org", "Comma-separated host list")
 	startPort := flag.Int("start", 1, "First port in range")
 	endPort := flag.Int("end", 1024, "Last port in range")
 	timeout := flag.Duration("timeout", 5*time.Second, "connection timeout per port")
@@ -107,15 +132,26 @@ func main() {
 
 	flag.Parse()
 
-	results := &scanResults{target: *target}
+	// Validate port range
+	if *startPort < 1 || *endPort > 65535 || *startPort > *endPort {
+		fmt.Println("Invalid port range")
+		return
+	}
+
+	// Determine targets
+	var targetList []string
+	if *target != "" {
+		targetList = []string{*target}
+	} else {
+		targetList = parseTargets(*targets)
+	}
+	
+	dialer := net.Dialer{Timeout: *timeout}	// Network dialer with timeout
 	var wg sync.WaitGroup
+	results := &scanResults{target: *target}
 	startTime := time.Now()
 	tasks := make(chan string, *workers)	// Buffered channel for port scanning tasks (capacity: 100)
 
-	// Network dialer with timeout
-	dialer := net.Dialer {
-		Timeout: *timeout,
-	}
 
 	// Launch worker goroutines
     for i := 1; i <= *workers; i++ {
@@ -123,11 +159,14 @@ func main() {
 		go worker(&wg, tasks, dialer, results)
 	}
 
-	// Generate scanning tasks for each port
-	for p := *startPort; p <= *endPort; p++ {
-		port := strconv.Itoa(p)	// Convert port num to str
-        address := net.JoinHostPort(*target, port)
-		tasks <- address	// Send addr. to workers via channel
+	
+	for _, target := range targetList {
+		target = strings.TrimSpace(target)
+		fmt.Printf("\nScanning %s (ports %d-%d)\n", target, *startPort, *endPort)
+		// Generate tasks for THIS target
+		for p := *startPort; p <= *endPort; p++ {
+			tasks <- net.JoinHostPort(target, strconv.Itoa(p))
+		}
 	}
 
 	// Close task channel
