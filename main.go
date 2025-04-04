@@ -57,7 +57,7 @@ func worker(wg *sync.WaitGroup, tasks chan string, dialer net.Dialer, results *s
             continue
         }
 
-		var success bool
+		var success bool 
 		for i := range maxRetries {     
 			conn, err := dialer.Dial("tcp", addr)	//Attempt tcp connection 
 
@@ -98,15 +98,13 @@ func worker(wg *sync.WaitGroup, tasks chan string, dialer net.Dialer, results *s
 
 func main() {
 
-	// Add a -target flag to specify the IP address or hostname
+	// command-line flags
 	target := flag.String("target","scanme.nmap.org", "Hostname or IP address to scan")
-
-	// Add a -workers flag to set the number of concurrent workers (default: 100)
-	workers := flag.Int("workers", 100, "Number of workers")
-
-	//Add -start-port and -end-port flags (default: 1 to 1024).
 	startPort := flag.Int("start", 1, "First port in range")
 	endPort := flag.Int("end", 1024, "Last port in range")
+	timeout := flag.Duration("timeout", 5*time.Second, "connection timeout in seconds")
+	workers := flag.Int("workers", 100, "Number of workers")
+
 	flag.Parse()
 
 	results := &scanResults{target: *target}
@@ -116,7 +114,7 @@ func main() {
 
 	// Network dialer with timeout
 	dialer := net.Dialer {
-		Timeout: 5 * time.Second,
+		Timeout: *timeout,
 	}
 
 	// Launch worker goroutines
