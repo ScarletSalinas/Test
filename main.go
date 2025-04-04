@@ -143,7 +143,7 @@ func grabBanner(conn net.Conn) string {
 	n, err := conn.Read(buffer)
 	if err != nil {
 		// If data can't be read or timeout, return empty str
-		if err != nil && err.Error() != "i/o timeout" {
+		if err.Error() == "i/o timeout" {
 			fmt.Printf("Error reading banner: %v\n", err)
 		}
 		return ""
