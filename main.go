@@ -88,7 +88,8 @@ func worker(wg *sync.WaitGroup, tasks chan string, dialer net.Dialer, results ma
         }
 
 		var success bool 
-		for i := range maxRetries {  	// Retry loop   
+		for i := 0; i < maxRetries; i++ {  	// Retry loop   
+			// Retry loop   
 			conn, err := dialer.Dial("tcp", addr)	//Attempt tcp connection 
 
 			if err == nil {	// Conection successful
@@ -96,11 +97,15 @@ func worker(wg *sync.WaitGroup, tasks chan string, dialer net.Dialer, results ma
 				fmt.Printf("Connection to %s was successful\n", addr)
 				success = true
 				
-				results[host].mu.Lock()
-                results[host].Ports = append(results[host].Ports, port)
-                results[host].Count++
+				results[host].mu.Lock()  // Lock the mutex
+
+				// Perform updates
+				results[host].Ports = append(results[host].Ports, port)
+				results[host].Count++
 				results[host].target = host
-                results[host].mu.Unlock()
+
+				results[host].mu.Unlock()  // Unlock the mutex
+
 
 				fmt.Printf("%s - port %d is open\n", host, port)
 				break	// Exit retry loop
@@ -109,14 +114,14 @@ func worker(wg *sync.WaitGroup, tasks chan string, dialer net.Dialer, results ma
 
 			// Calculate exponential backoff
 			backoff := time.Duration(1<<i) * time.Second
-			fmt.Printf("Attempt %d to %s failed. Waiting %v...\n", i+1,  addr, backoff)
+			fmt.Printf("Attempt %d to %s failed. Waiting %v...\n", i+1, addr, backoff)
 
 			time.Sleep(backoff)	// Wait before retrying
 	    }
 
 		// Report if all attempts failed
 		if !success {
-			fmt.Printf("Failed to connect to %v after %d attempts\n", port, maxRetries)
+			fmt.Printf("Failed to connect to %v after %d attempts\n", addr, maxRetries)
 		}
 	}
 }
@@ -147,11 +152,12 @@ func main() {
 		targetList = parseTargets(*targets)
 	}
 
+	sort.Strings(targetList)  // Added sorting for consistent target scanning order
+
 	// Initialize results with start time
 	results:= make(map[string]*scanResults)
 	startTimes := make(map[string]time.Time) // Initialize startTimes map
 	for _, t := range targetList {
-		t = strings.TrimSpace(t)
 		results[t] = &scanResults{target: t}	//Initialize with target
 		startTimes[t] = time.Now()	// Record start time for each target
 	}
@@ -168,11 +174,12 @@ func main() {
 	}
 
 	// Process targets
-    for currentTarget := range results {
+	for currentTarget, _ := range results {
         for port := *startPort; port <= *endPort; port++ {
             tasks <- net.JoinHostPort(currentTarget, strconv.Itoa(port))
         }
     }
+	
     close(tasks)
 
     wg.Wait()
@@ -183,3 +190,4 @@ func main() {
 		fmt.Println(res)
     }
 }
+
