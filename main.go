@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -65,9 +66,28 @@ func parseTargets(input string) []string {
 	return targets
 }
 
+// Grabber func to try to read and print the initial response from the server
+func grabBanner(conn net.Conn) string {
+	// Set a timeout for reading banner
+	conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+
+	buffer := make([]byte, 1024)	// Buffer to hold data
+	n, err := conn.Read(buffer)
+	if err != nil {
+		// If data can't be read or timeout, return empty str
+		if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
+            fmt.Printf("\nBanner read timeout: %v\n", err)
+        } else {
+            fmt.Printf("\nError reading banner: %v\n", err)
+        }
+		return ""
+	}
+	// Return the banner as a string
+	return string(buffer[:n])
+}
 
 // Worker func handles port scanning
-func worker(wg *sync.WaitGroup, tasks chan string, dialer net.Dialer, results map[string] *scanResults) {
+func worker(wg *sync.WaitGroup, tasks chan string, dialer net.Dialer, results map[string] *scanResults, completedTasks *int32) {
 	defer wg.Done()	// Signal done when worker func exits
 	maxRetries := 3	// Max retry attempts
 
@@ -122,7 +142,7 @@ func worker(wg *sync.WaitGroup, tasks chan string, dialer net.Dialer, results ma
 
 			// Calculate exponential backoff
 			backoff := time.Duration(1<<i) * time.Second
-			fmt.Printf("Attempt %d to %s failed. Waiting %v...\n", i+1, addr, backoff)
+			fmt.Printf("\nAttempt %d to %s failed. Waiting %v...\n", i+1, addr, backoff)
 
 			time.Sleep(backoff)	// Wait before retrying
 	    }
@@ -131,25 +151,10 @@ func worker(wg *sync.WaitGroup, tasks chan string, dialer net.Dialer, results ma
 		if !success {
 			fmt.Printf("\nFailed to connect to %v after %d attempts\n", addr, maxRetries)
 		}
-	}
-}
 
-// Grabber func to try to read and print the initial response from the server
-func grabBanner(conn net.Conn) string {
-	// Set a timeout for reading banner
-	conn.SetReadDeadline(time.Now().Add(2*time.Second))
-
-	buffer := make([]byte, 1024)	// Buffer to hold data
-	n, err := conn.Read(buffer)
-	if err != nil {
-		// If data can't be read or timeout, return empty str
-		if err.Error() == "i/o timeout" {
-			fmt.Printf("\nError reading banner: %v\n", err)
-		}
-		return ""
+		// Increment the completed task counter atomically
+		atomic.AddInt32(completedTasks, 1)
 	}
-	// Return the banner as a string
-	return string(buffer[:n])
 }
 
 func main() {
@@ -161,6 +166,7 @@ func main() {
 	endPort := flag.Int("end", 1024, "Last port in range")
 	timeout := flag.Duration("timeout", 5*time.Second, "connection timeout per port")
 	workers := flag.Int("workers", 100, "Number of workers")
+	
 
 	flag.Parse()
 
@@ -178,16 +184,38 @@ func main() {
 		targetList = parseTargets(*targets)
 	}
 
-	sort.Strings(targetList)  // Added sorting for consistent target scanning order
+	// Calculate total number of tasks (ports)
+	totalTasks := 0
+	for range targetList {
+		totalTasks += (*endPort - *startPort + 1) // Total number of ports to scan
+	}
 
+	sort.Strings(targetList)  // Added sorting for consistent target scanning order
+	
 	// Initialize results with start time
 	results:= make(map[string]*scanResults)
 	startTimes := make(map[string]time.Time) // Initialize startTimes map
+	
 	for _, t := range targetList {
 		results[t] = &scanResults{target: t}	//Initialize with target
 		startTimes[t] = time.Now()	// Record start time for each target
 	}
 	
+	// Atomic counter for completed tasks
+	var completedTasks int32
+
+	// Progress indicator goroutine (runs every second)
+	go func() {
+		ticker := time.NewTicker(1 * time.Second)
+		defer ticker.Stop()
+
+		for range ticker.C {
+			completed := atomic.LoadInt32(&completedTasks)
+			progress := float64(completed) / float64(totalTasks) * 100
+			fmt.Printf("\rProgress: %.2f%% (%d/%d tasks completed)", progress, completed, totalTasks)
+		}
+	}()
+
 	dialer := net.Dialer{Timeout: *timeout}	// Network dialer with timeout
 	tasks := make(chan string, *workers)	// Buffered channel for port scanning tasks (capacity: 100)
 	var wg sync.WaitGroup
@@ -196,24 +224,20 @@ func main() {
 	// Launch worker goroutines
     for i := 0; i < *workers; i++ {
 		wg.Add(1)
-		go worker(&wg, tasks, dialer, results)
+		go worker(&wg, tasks, dialer, results, &completedTasks)
 	}
 
-	// Process targets
-	for currentTarget, _ := range results {
-        for port := *startPort; port <= *endPort; port++ {
-            tasks <- net.JoinHostPort(currentTarget, strconv.Itoa(port))
-        }
-    }
+	// Process targets: submit tasks for each port
+	for _, currentTarget := range targetList {
+		go func(target string) {
+			for port := *startPort; port <= *endPort; port++ {
+				tasks <- net.JoinHostPort(target, strconv.Itoa(port)) // Submit port scan task
+			}
+		}(currentTarget) // Pass currentTarget to the goroutine
+	}
 
-    close(tasks)
+	wg.Wait()
+	// Close tasks channel after submitting all tasks
+	close(tasks)
 
-    wg.Wait()
-
-    // Print results
-    for currentTarget, res := range results {
-		res.Duration = time.Since(startTimes[currentTarget])
-		fmt.Println(res)
-    }
 }
-
