@@ -102,7 +102,7 @@ func main() {
 	target := flag.String("target","scanme.nmap.org", "Hostname or IP address to scan")
 	startPort := flag.Int("start", 1, "First port in range")
 	endPort := flag.Int("end", 1024, "Last port in range")
-	timeout := flag.Duration("timeout", 5*time.Second, "connection timeout in seconds")
+	timeout := flag.Duration("timeout", 5*time.Second, "connection timeout per port")
 	workers := flag.Int("workers", 100, "Number of workers")
 
 	flag.Parse()
