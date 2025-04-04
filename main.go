@@ -19,6 +19,7 @@ type scanResults struct {
 	target string	// Stores scanned host
 	Ports []int	// Stores port nums
 	Count int	// Total port count
+	Duration time.Duration // Stores scan time
 }
 
 func (r *scanResults) String() string {
@@ -30,8 +31,9 @@ func (r *scanResults) String() string {
 		"-----------------\n"+
 		"Target: %s\n"+
 		"Open ports %v\n"+
-		"Total open: %d\n",
-		r.target, r.Ports, r.Count)
+		"Total open: %d\n"+
+		"Duration: %s\n",
+		r.target, r.Ports, r.Count, r.Duration)
 }
 
 // Worker func handles port scanning
@@ -66,6 +68,7 @@ func worker(wg *sync.WaitGroup, tasks chan string, dialer net.Dialer, results *s
 				results.mu.Lock()
                 results.Ports = append(results.Ports, port)
                 results.Count++
+
                 results.mu.Unlock()
 				fmt.Printf("%s - port %d is open\n", host, port)
 				break	// Exit retry loop
@@ -108,6 +111,7 @@ func main() {
 
 	results := &scanResults{target: *target}
 	var wg sync.WaitGroup
+	startTime := time.Now()
 	tasks := make(chan string, *workers)	// Buffered channel for port scanning tasks (capacity: 100)
 
 	// Network dialer with timeout
@@ -134,8 +138,13 @@ func main() {
 	// Wait for all workers to complete
 	wg.Wait()
 
+	// Calculate scan time
+	results.mu.Lock()
+	results.Duration = time.Since(startTime)
+	results.mu.Unlock()
+
 	// Print Summary
-	fmt.Print(results)
+	fmt.Printf("\n%s\n", results)
 
 	// Program exits when all scanning is done
 }
