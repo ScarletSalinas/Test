@@ -1,13 +1,11 @@
-// Purpose: this program demonstrates a concurrent TCP port scanner that checks for open ports on a target host
-// Target host for scanning: scanme.nmap.org
-// with retry logic and exponential backoff for failed attempts
-
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"net"
+	"os"
 	"sort"
 	"strconv"
 	"strings"
@@ -16,164 +14,183 @@ import (
 	"time"
 )
 
-// Scan Summary
 type scanResults struct {
-	mu sync.Mutex
-	target string	// Stores scanned host
-	Ports []int	// Stores port nums
-	Count int	// Total port count
-	Duration time.Duration // Stores scan time
+	mu       sync.Mutex
+	target   string
+	Ports    []int
+	Count    int
+	Duration time.Duration
 }
 
-// Func to print scan summary results
 func (r *scanResults) String() string {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
 	sort.Ints(r.Ports)
 	if len(r.Ports) == 0 {
-		return "No ports found"
+		return fmt.Sprintf("\nScan Results\n-----------\nTarget: %s\nNo open ports found\nDuration: %s\n",
+			r.target, r.Duration.Round(time.Millisecond))
 	}
 
 	return fmt.Sprintf(
-        "\nScan Results\n"+
-        "-----------\n"+
-        "Target: %s\n"+
-        "Open ports: %v\n"+
-        "Total open: %d\n"+
-        "Duration: %s\n",
-        r.target, r.Ports, r.Count, r.Duration.Round(time.Millisecond))
+		"\nScan Results\n"+
+			"------------------\n"+
+			"Target: %s\n"+
+			"Open ports: %v\n"+
+			"Total open: %d\n"+
+			"Duration: %s\n",
+		r.target, r.Ports, r.Count, r.Duration.Round(time.Millisecond))
 }
 
-// Func to separate comma list into individual target strings
 func parseTargets(input string) []string {
-	targets := []string{}	// Initialize empty slice
-
-	// Process input
+	targets := []string{}
 	if input != "" {
-		raw := strings.Split(input, ",")	// Split by comma
-		for _, t:= range raw {	// Clean each split
+		raw := strings.Split(input, ",")
+		for _, t := range raw {
 			if t = strings.TrimSpace(t); t != "" {
 				targets = append(targets, t)
 			}
 		}
 	}
-
-	// Apply default target if no other valid one found
 	if len(targets) == 0 {
 		targets = append(targets, "scanme.nmap.org")
 	}
 	return targets
 }
 
-// Grabber func to try to read and print the initial response from the server
-func grabBanner(conn net.Conn) string {
-	// Set a timeout for reading banner
-	conn.SetReadDeadline(time.Now().Add(2 * time.Second))
-
-	buffer := make([]byte, 1024)	// Buffer to hold data
-	n, err := conn.Read(buffer)
-	if err != nil {
-		// If data can't be read or timeout, return empty str
-		if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
-            fmt.Printf("\nBanner read timeout: %v\n", err)
-        } else {
-            fmt.Printf("\nError reading banner: %v\n", err)
-        }
-		return ""
+func parsePorts(input string) ([]int, error) {
+	if input == "" {
+		return nil, nil
 	}
-	// Return the banner as a string
-	return string(buffer[:n])
+
+	var ports []int
+	for _, portStr := range strings.Split(input, ",") {
+		portStr = strings.TrimSpace(portStr)
+		if portStr == "" {
+			continue
+		}
+		port, err := strconv.Atoi(portStr)
+		if err != nil {
+			return nil, fmt.Errorf("invalid port number %q", portStr)
+		}
+		if port < 1 || port > 65535 {
+			return nil, fmt.Errorf("port %d out of range (1-65535)", port)
+		}
+		ports = append(ports, port)
+	}
+	return ports, nil
 }
 
-// Worker func handles port scanning
-func worker(wg *sync.WaitGroup, tasks chan string, dialer net.Dialer, results map[string] *scanResults, completedTasks *int32) {
-	defer wg.Done()	// Signal done when worker func exits
-	maxRetries := 3	// Max retry attempts
+func grabBanner(conn net.Conn, timeout time.Duration) string {
+	conn.SetReadDeadline(time.Now().Add(timeout))
+	defer conn.SetReadDeadline(time.Time{})
 
-	// Process each address from tasks channel
-    for addr := range tasks {
+	buffer := make([]byte, 1024)
+	n, err := conn.Read(buffer)
+	if err != nil {
+		if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
+			return ""
+		}
+		return ""
+	}
+	return strings.TrimSpace(string(buffer[:n]))
+}
 
-		// Error handling for ivalid address + port number
-        host, portStr, err := net.SplitHostPort(addr)
-        if err != nil {
-            fmt.Printf("\nInvalid address %q: %v\n", addr, err)
-            continue
-        }
+func worker(ctx context.Context, wg *sync.WaitGroup, tasks chan string, dialer net.Dialer,
+	results map[string]*scanResults, completedTasks *int32) {
+	defer wg.Done()
+	maxRetries := 3
 
-		port, err := strconv.Atoi(portStr) // Convert port string to int
-        if err != nil {
-            fmt.Printf("\nInvalid port number %q: %v\n", portStr, err)
-            continue
-        }
-
-		var success bool 
-		for i := 0; i < maxRetries; i++ {  	// Retry loop   
-			// Retry loop   
-			conn, err := dialer.Dial("tcp", addr)	//Attempt tcp connection 
-
-			if err == nil {	// Conection successful
-				conn.Close()	// Close connection
-				fmt.Printf("\nConnection to %s was successful\n", addr)
-				success = true
-
-				// Grab banner
-				banner := grabBanner(conn)
-				if banner != "" {
-					fmt.Printf("\nBanner for %s:%d: %s\n", host, port, banner)
-				} else {
-					fmt.Printf("\nNo banner found for %s:%d\n", host, port)
-				}
-				
-				results[host].mu.Lock()  // Lock the mutex
-
-				// Perform updates
-				results[host].Ports = append(results[host].Ports, port)
-				results[host].Count++
-				results[host].target = host
-
-				results[host].mu.Unlock()  // Unlock the mutex
-
-
-				fmt.Printf("\n%s - port %d is open\n", host, port)
-				break	// Exit retry loop
-			
+	for {
+		select {
+		case addr, ok := <-tasks:
+			if !ok {
+				return
 			}
 
-			// Calculate exponential backoff
-			backoff := time.Duration(1<<i) * time.Second
-			fmt.Printf("\nAttempt %d to %s failed. Waiting %v...\n", i+1, addr, backoff)
+			host, portStr, err := net.SplitHostPort(addr)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Invalid address %q: %v\n", addr, err)
+				atomic.AddInt32(completedTasks, 1)
+				continue
+			}
 
-			time.Sleep(backoff)	// Wait before retrying
-	    }
+			port, err := strconv.Atoi(portStr)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Invalid port number %q: %v\n", portStr, err)
+				atomic.AddInt32(completedTasks, 1)
+				continue
+			}
 
-		// Report if all attempts failed
-		if !success {
-			fmt.Printf("\nFailed to connect to %v after %d attempts\n", addr, maxRetries)
+			var success bool
+			for i := 0; i < maxRetries; i++ {
+				conn, err := dialer.Dial("tcp", addr)
+				if err == nil {
+					banner := grabBanner(conn, dialer.Timeout/2)
+					conn.Close()
+
+					if banner != "" {
+						fmt.Printf("Banner for %s:%d: %s\n", host, port, banner)
+					}
+
+					results[host].mu.Lock()
+					results[host].Ports = append(results[host].Ports, port)
+					results[host].Count++
+					results[host].target = host
+					results[host].mu.Unlock()
+
+					fmt.Printf("%s - port %d is open\n", host, port)
+					success = true
+					break
+				}
+
+				backoff := time.Duration(1<<i) * time.Second
+				fmt.Printf("Attempt %d to %s failed. Waiting %v...\n", i+1, addr, backoff)
+				time.Sleep(backoff)
+			}
+
+			if !success {
+				fmt.Printf("Failed to connect to %v after %d attempts\n", addr, maxRetries)
+			}
+			atomic.AddInt32(completedTasks, 1)
+
+		case <-ctx.Done():
+			return
 		}
-
-		// Increment the completed task counter atomically
-		atomic.AddInt32(completedTasks, 1)
 	}
 }
 
 func main() {
-
-	// command-line flags
-	target  := flag.String("target", "", "Single host to scan (overrides -targets)")
+	target := flag.String("target", "", "Single host to scan (overrides -targets)")
 	targets := flag.String("targets", "scanme.nmap.org", "Comma-separated host list")
 	startPort := flag.Int("start", 1, "First port in range")
 	endPort := flag.Int("end", 1024, "Last port in range")
 	timeout := flag.Duration("timeout", 5*time.Second, "connection timeout per port")
 	workers := flag.Int("workers", 100, "Number of workers")
-	
+	portsList := flag.String("ports", "", "Comma-separated list of ports to scan (overrides -start and -end)")
 
 	flag.Parse()
 
-	// Validate port range
-	if *startPort < 1 || *endPort > 65535 || *startPort > *endPort {
-		fmt.Println("Invalid port range")
-		return
+	// Parse ports list if provided
+	var portsToScan []int
+	if *portsList != "" {
+		var err error
+		portsToScan, err = parsePorts(*portsList)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error parsing ports: %v\n", err)
+			return
+		}
+	} else {
+		// Validate port range
+		if *startPort < 1 || *endPort > 65535 || *startPort > *endPort {
+			fmt.Fprintf(os.Stderr, "Invalid port range. Must be between 1-65535 and start <= end\n")
+			return
+		}
+		
+		// Generate ports from range
+		for port := *startPort; port <= *endPort; port++ {
+			portsToScan = append(portsToScan, port)
+		}
 	}
 
 	// Determine targets
@@ -184,60 +201,72 @@ func main() {
 		targetList = parseTargets(*targets)
 	}
 
-	// Calculate total number of tasks (ports)
-	totalTasks := 0
-	for range targetList {
-		totalTasks += (*endPort - *startPort + 1) // Total number of ports to scan
+	// Initialize results with start time
+	results := make(map[string]*scanResults)
+	startTimes := make(map[string]time.Time)
+	for _, t := range targetList {
+		results[t] = &scanResults{target: t}
+		startTimes[t] = time.Now()
 	}
 
-	sort.Strings(targetList)  // Added sorting for consistent target scanning order
-	
-	// Initialize results with start time
-	results:= make(map[string]*scanResults)
-	startTimes := make(map[string]time.Time) // Initialize startTimes map
-	
-	for _, t := range targetList {
-		results[t] = &scanResults{target: t}	//Initialize with target
-		startTimes[t] = time.Now()	// Record start time for each target
-	}
-	
-	// Atomic counter for completed tasks
+	// Calculate total number of tasks
+	totalTasks := len(targetList) * len(portsToScan)
 	var completedTasks int32
 
-	// Progress indicator goroutine (runs every second)
+	// Create context for cancellation
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// Progress indicator
 	go func() {
-		ticker := time.NewTicker(1 * time.Second)
+		ticker := time.NewTicker(500 * time.Millisecond)
 		defer ticker.Stop()
 
-		for range ticker.C {
-			completed := atomic.LoadInt32(&completedTasks)
-			progress := float64(completed) / float64(totalTasks) * 100
-			fmt.Printf("\rProgress: %.2f%% (%d/%d tasks completed)", progress, completed, totalTasks)
+		for {
+			select {
+			case <-ticker.C:
+				completed := atomic.LoadInt32(&completedTasks)
+				progress := float64(completed) / float64(totalTasks) * 100
+				fmt.Fprintf(os.Stderr, "\rProgress: %.2f%% (%d/%d)", progress, completed, totalTasks)
+			case <-ctx.Done():
+				fmt.Fprintf(os.Stderr, "\n")
+				return
+			}
 		}
 	}()
 
-	dialer := net.Dialer{Timeout: *timeout}	// Network dialer with timeout
-	tasks := make(chan string, *workers)	// Buffered channel for port scanning tasks (capacity: 100)
+	dialer := net.Dialer{Timeout: *timeout}
+	tasks := make(chan string, *workers)
 	var wg sync.WaitGroup
 
-
-	// Launch worker goroutines
-    for i := 0; i < *workers; i++ {
+	// Launch workers
+	for i := 0; i < *workers; i++ {
 		wg.Add(1)
-		go worker(&wg, tasks, dialer, results, &completedTasks)
+		go worker(ctx, &wg, tasks, dialer, results, &completedTasks)
 	}
 
-	// Process targets: submit tasks for each port
-	for _, currentTarget := range targetList {
-		go func(target string) {
-			for port := *startPort; port <= *endPort; port++ {
-				tasks <- net.JoinHostPort(target, strconv.Itoa(port)) // Submit port scan task
+	// Submit tasks in separate goroutine
+	go func() {
+		defer close(tasks)
+		for _, currentTarget := range targetList {
+			for _, port := range portsToScan {
+				select {
+				case tasks <- net.JoinHostPort(currentTarget, strconv.Itoa(port)):
+				case <-ctx.Done():
+					return
+				}
 			}
-		}(currentTarget) // Pass currentTarget to the goroutine
-	}
+		}
+	}()
 
+	// Wait for completion
 	wg.Wait()
-	// Close tasks channel after submitting all tasks
-	close(tasks)
+	cancel()
 
+	// Print final results
+	fmt.Println("\n=== SCAN COMPLETE ===")
+	for target, res := range results {
+		res.Duration = time.Since(startTimes[target])
+		fmt.Println(res.String())
+	}
 }
