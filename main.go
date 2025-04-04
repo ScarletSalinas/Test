@@ -8,21 +8,54 @@ import (
 	"flag"
 	"fmt"
 	"net"
+	"sort"
 	"strconv"
 	"sync"
 	"time"
 )
 
+type scanResults struct {
+	mu sync.Mutex
+	target string	// Stores scanned host
+	Ports []int	// Stores port nums
+	Count int	// Total port count
+}
+
+func (r *scanResults) String() string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	sort.Ints(r.Ports)
+	return fmt.Sprintf(
+		"\nScan Summary\n"+
+		"-----------------\n"+
+		"Target: %s\n"+
+		"Open ports %v\n"+
+		"Total open: %d\n",
+		r.target, r.Ports, r.Count)
+}
+
 // Worker func handles port scanning
-func worker(wg *sync.WaitGroup, tasks chan string, dialer net.Dialer) {
+func worker(wg *sync.WaitGroup, tasks chan string, dialer net.Dialer, results *scanResults) {
 	defer wg.Done()	// Signal done when worker func exits
 	maxRetries := 3	// Max retry attempts
 
 	// Process each address from tasks channel
     for addr := range tasks {
-		var success bool	// Tracks connection success
 
-		// maxRetry loop
+		// Error handling for ivalid address + port number
+        host, portStr, err := net.SplitHostPort(addr)
+        if err != nil {
+            fmt.Printf("Invalid address %q: %v\n", addr, err)
+            continue
+        }
+
+		port, err := strconv.Atoi(portStr)
+        if err != nil {
+            fmt.Printf("Invalid port number %q: %v\n", portStr, err)
+            continue
+        }
+
+		var success bool
 		for i := range maxRetries {     
 			conn, err := dialer.Dial("tcp", addr)	//Attempt tcp connection 
 
@@ -30,8 +63,20 @@ func worker(wg *sync.WaitGroup, tasks chan string, dialer net.Dialer) {
 				conn.Close()	// Close connection
 				fmt.Printf("Connection to %s was successful\n", addr)
 				success = true
+				results.mu.Lock()
+                results.Ports = append(results.Ports, port)
+                results.Count++
+                results.mu.Unlock()
+				fmt.Printf("%s - port %d is open\n", host, port)
 				break	// Exit retry loop
 			
+			}
+
+			if success {
+				results.mu.Lock()
+				results.Ports = append(results.Ports, port)
+				results.Count++
+				results.mu.Unlock()
 			}
 
 			// Calculate expon. backoff
@@ -59,16 +104,11 @@ func main() {
 	//Add -start-port and -end-port flags (default: 1 to 1024).
 	startPort := flag.Int("start", 1, "First port in range")
 	endPort := flag.Int("end", 1024, "Last port in range")
-
-	// Parse flags
 	flag.Parse()
 
-	fmt.Printf("Starting scan of %s (ports %d-%d)\n", *target, *startPort, *endPort)
-
+	results := &scanResults{target: *target}
 	var wg sync.WaitGroup
-
-	// Buffered channel for port scanning tasks (capacity: 100)
-	tasks := make(chan string, *workers)
+	tasks := make(chan string, *workers)	// Buffered channel for port scanning tasks (capacity: 100)
 
 	// Network dialer with timeout
 	dialer := net.Dialer {
@@ -78,7 +118,7 @@ func main() {
 	// Launch worker goroutines
     for i := 1; i <= *workers; i++ {
 		wg.Add(1)
-		go worker(&wg, tasks, dialer)
+		go worker(&wg, tasks, dialer, results)
 	}
 
 	// Generate scanning tasks for each port
@@ -93,6 +133,9 @@ func main() {
 
 	// Wait for all workers to complete
 	wg.Wait()
+
+	// Print Summary
+	fmt.Print(results)
 
 	// Program exits when all scanning is done
 }
