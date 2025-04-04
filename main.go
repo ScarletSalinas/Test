@@ -77,13 +77,13 @@ func worker(wg *sync.WaitGroup, tasks chan string, dialer net.Dialer, results ma
 		// Error handling for ivalid address + port number
         host, portStr, err := net.SplitHostPort(addr)
         if err != nil {
-            fmt.Printf("Invalid address %q: %v\n", addr, err)
+            fmt.Printf("\nInvalid address %q: %v\n", addr, err)
             continue
         }
 
 		port, err := strconv.Atoi(portStr) // Convert port string to int
         if err != nil {
-            fmt.Printf("Invalid port number %q: %v\n", portStr, err)
+            fmt.Printf("\nInvalid port number %q: %v\n", portStr, err)
             continue
         }
 
@@ -94,15 +94,15 @@ func worker(wg *sync.WaitGroup, tasks chan string, dialer net.Dialer, results ma
 
 			if err == nil {	// Conection successful
 				conn.Close()	// Close connection
-				fmt.Printf("Connection to %s was successful\n", addr)
+				fmt.Printf("\nConnection to %s was successful\n", addr)
 				success = true
 
 				// Grab banner
 				banner := grabBanner(conn)
 				if banner != "" {
-					fmt.Printf("Banner for %s:%d: %s\n", host, port, banner)
+					fmt.Printf("\nBanner for %s:%d: %s\n", host, port, banner)
 				} else {
-					fmt.Printf("No banner found for %s:%d\n", host, port)
+					fmt.Printf("\nNo banner found for %s:%d\n", host, port)
 				}
 				
 				results[host].mu.Lock()  // Lock the mutex
@@ -115,7 +115,7 @@ func worker(wg *sync.WaitGroup, tasks chan string, dialer net.Dialer, results ma
 				results[host].mu.Unlock()  // Unlock the mutex
 
 
-				fmt.Printf("%s - port %d is open\n", host, port)
+				fmt.Printf("\n%s - port %d is open\n", host, port)
 				break	// Exit retry loop
 			
 			}
@@ -129,7 +129,7 @@ func worker(wg *sync.WaitGroup, tasks chan string, dialer net.Dialer, results ma
 
 		// Report if all attempts failed
 		if !success {
-			fmt.Printf("Failed to connect to %v after %d attempts\n", addr, maxRetries)
+			fmt.Printf("\nFailed to connect to %v after %d attempts\n", addr, maxRetries)
 		}
 	}
 }
@@ -144,7 +144,7 @@ func grabBanner(conn net.Conn) string {
 	if err != nil {
 		// If data can't be read or timeout, return empty str
 		if err.Error() == "i/o timeout" {
-			fmt.Printf("Error reading banner: %v\n", err)
+			fmt.Printf("\nError reading banner: %v\n", err)
 		}
 		return ""
 	}
