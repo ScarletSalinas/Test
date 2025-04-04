@@ -1,9 +1,11 @@
 // Purpose: this program demonstrates a concurrent TCP port scanner that checks for open ports on a target host
+// Target host for scanning: scanme.nmap.org
 // with retry logic and exponential backoff for failed attempts
 
 package main
 
 import (
+	"flag"
 	"fmt"
 	"net"
 	"strconv"
@@ -48,13 +50,22 @@ func worker(wg *sync.WaitGroup, tasks chan string, dialer net.Dialer) {
 
 func main() {
 
+	// Add a -target flag to specify the IP address or hostname
+	target := flag.String("target","scanme.nmap.org", "Hostname or IP address to scan")
+
+	//Add -start-port and -end-port flags (default: 1 to 1024).
+	startPort := flag.Int("start", 1, "First port in range")
+	endPort := flag.Int("end", 1024, "Last port in range")
+
+	// Parse flags
+	flag.Parse()
+
+	fmt.Printf("Starting scan of %s (ports %d-%d)\n", *target, *startPort, *endPort)
+
 	var wg sync.WaitGroup
 
 	// Buffered channel for port scanning tasks (capacity: 100)
 	tasks := make(chan string, 100)
-
-	// Target host for scanning
-    target := "scanme.nmap.org"
 
 	// Network dialer with timeout
 	dialer := net.Dialer {
@@ -70,13 +81,10 @@ func main() {
 		go worker(&wg, tasks, dialer)
 	}
 
-	// Ports to scan (1-512)
-	ports := 512
-
 	// Generate scanning tasks for each port
-	for p := 1; p <= ports; p++ {
+	for p := *startPort; p <= *endPort; p++ {
 		port := strconv.Itoa(p)	// Convert port num to str
-        address := net.JoinHostPort(target, port)
+        address := net.JoinHostPort(*target, port)
 		tasks <- address	// Send addr. to workers via channel
 	}
 
