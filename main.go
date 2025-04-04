@@ -96,6 +96,14 @@ func worker(wg *sync.WaitGroup, tasks chan string, dialer net.Dialer, results ma
 				conn.Close()	// Close connection
 				fmt.Printf("Connection to %s was successful\n", addr)
 				success = true
+
+				// Grab banner
+				banner := grabBanner(conn)
+				if banner != "" {
+					fmt.Printf("Banner for %s:%d: %s\n", host, port, banner)
+				} else {
+					fmt.Printf("No banner found for %s:%d\n", host, port)
+				}
 				
 				results[host].mu.Lock()  // Lock the mutex
 
@@ -124,6 +132,24 @@ func worker(wg *sync.WaitGroup, tasks chan string, dialer net.Dialer, results ma
 			fmt.Printf("Failed to connect to %v after %d attempts\n", addr, maxRetries)
 		}
 	}
+}
+
+// Grabber func to try to read and print the initial response from the server
+func grabBanner(conn net.Conn) string {
+	// Set a timeout for reading banner
+	conn.SetReadDeadline(time.Now().Add(2*time.Second))
+
+	buffer := make([]byte, 1024)	// Buffer to hold data
+	n, err := conn.Read(buffer)
+	if err != nil {
+		// If data can't be read or timeout, return empty str
+		if err != nil && err.Error() != "i/o timeout" {
+			fmt.Printf("Error reading banner: %v\n", err)
+		}
+		return ""
+	}
+	// Return the banner as a string
+	return string(buffer[:n])
 }
 
 func main() {
@@ -179,7 +205,7 @@ func main() {
             tasks <- net.JoinHostPort(currentTarget, strconv.Itoa(port))
         }
     }
-	
+
     close(tasks)
 
     wg.Wait()
