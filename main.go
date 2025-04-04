@@ -33,7 +33,7 @@ func (r *scanResults) String() string {
 		"Open ports %v\n"+
 		"Total open: %d\n"+
 		"Duration: %s\n",
-		r.target, r.Ports, r.Count, r.Duration)
+		r.target, r.Ports, r.Count, r.Duration.Round(time.Millisecond))
 }
 
 // Worker func handles port scanning
