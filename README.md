@@ -1,10 +1,19 @@
-## Test #1 Port Scanner
+## Test #1: TCPPort Scanner
 ### Purpose: this program demonstrates a concurrent TCP port scanner that checks for open ports on a target host
 
 ###  Port Scanner: Files
 - main.go
 
-### Usage
+### Features
+
+- Concurrent scanning with configurable worker count
+- Automatic retry with exponential backoff
+- Banner grabbing for service identification
+- Real-time progress tracking
+- Support for both port ranges and specific ports
+- Configurable timeouts
+- 
+### Insatallation
 1. Create an executable file.
     ```bash
      go build -o scanner main.go
@@ -13,15 +22,25 @@
    ```bash
     ./scanner
     ```
-3. To use port scanner use --help
+### Usage
+- Scan default ports (1-1024) on a target:
      ```cpp
-    ./scanner --help
+    ./scanner -target scanme.nmap.org
+    ```
+- Scan specific ports
+    ```cpp
+    ./scanner -target scanme.nmap.org
+    ```
+- Scan custom port range
+    ```cpp
+    ./scanner -target localhost -start 8000 -end 9000
+- Advanced options
     ```
 ## References
-  -LLM: DeepSeek to for tutoring.
-  -Exaple below:
+  - LLM: DeepSeek, for tutoring, learning necessary concepts, and for guidance when needed.
+  
 
   
   
 ### Link to Video
-[Watch demo here](https://youtu.be/klLXBngune4)   
+[Watch demo here]()   
